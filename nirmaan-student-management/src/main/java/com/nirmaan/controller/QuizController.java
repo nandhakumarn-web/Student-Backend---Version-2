@@ -1,124 +1,216 @@
 package com.nirmaan.controller;
 
-import com.nirmaan.dto.*;
+import com.nirmaan.dto.ApiResponse;
+import com.nirmaan.dto.QuizDto;
+import com.nirmaan.dto.QuestionDto;
+import com.nirmaan.entity.StudentQuizAttempt;
+import com.nirmaan.enums.CourseType;
+import com.nirmaan.security.UserPrincipal;
 import com.nirmaan.service.QuizService;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.responses.ApiResponses;
-import io.swagger.v3.oas.annotations.responses.ApiResponse as SwaggerResponse;
-import io.swagger.v3.oas.annotations.tags.Tag;
+import com.nirmaan.service.TrainerService;
+import com.nirmaan.service.StudentService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDate;
+import jakarta.validation.Valid;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/quiz")
 @RequiredArgsConstructor
-@Slf4j
-@Tag(name = "Quiz", description = "Quiz management APIs")
-@CrossOrigin(origins = "*", maxAge = 3600)
 public class QuizController {
 
     private final QuizService quizService;
+    private final TrainerService trainerService;
+    private final StudentService studentService;
 
-    @GetMapping("/available")
-    @Operation(summary = "Get available quizzes", description = "Retrieve available quizzes for students")
-    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER', 'STUDENT')")
-    @ApiResponses(value = {
-        @SwaggerResponse(responseCode = "200", description = "Available quizzes retrieved successfully"),
-        @SwaggerResponse(responseCode = "403", description = "Access denied")
-    })
-    public ResponseEntity<ApiResponse<Page<QuizDto>>> getAvailableQuizzes(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size,
-            @RequestParam(required = false) String courseType,
-            @RequestParam(required = false) Long batchId) {
-        
-        Pageable pageable = PageRequest.of(page, size, Sort.by("startTime").descending());
-        Page<QuizDto> quizzes = quizService.getAvailableQuizzes(pageable, courseType, batchId);
-        return ResponseEntity.ok(new ApiResponse<>(true, "Available quizzes retrieved successfully", quizzes));
+    // ===============================
+    // = ADMIN OPERATIONS
+    // ===============================
+
+    @GetMapping("/all")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<List<QuizDto>>> getAllQuizzes() {
+        List<QuizDto> quizzes = quizService.getAllQuizzes();
+        return ResponseEntity.ok(new ApiResponse<>(true, "All quizzes retrieved successfully", quizzes));
     }
 
-    @GetMapping("/{quizId}")
-    @Operation(summary = "Get quiz by ID", description = "Retrieve quiz details by ID")
-    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER', 'STUDENT')")
-    public ResponseEntity<ApiResponse<QuizDto>> getQuizById(@PathVariable Long quizId) {
-        QuizDto quiz = quizService.getQuizById(quizId);
+    @GetMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
+    public ResponseEntity<ApiResponse<QuizDto>> getQuizById(@PathVariable Long id) {
+        QuizDto quiz = quizService.getQuizById(id);
         return ResponseEntity.ok(new ApiResponse<>(true, "Quiz retrieved successfully", quiz));
     }
 
-    @GetMapping("/trainer/{trainerId}")
-    @Operation(summary = "Get quizzes by trainer", description = "Retrieve quizzes created by a specific trainer")
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<String>> deleteQuiz(@PathVariable Long id) {
+        quizService.deleteQuiz(id);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz deleted successfully"));
+    }
+
+    // ===============================
+    // = TRAINER OPERATIONS
+    // ===============================
+
+    @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
-    public ResponseEntity<ApiResponse<Page<QuizDto>>> getQuizzesByTrainer(
-            @PathVariable Long trainerId,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size) {
+    public ResponseEntity<ApiResponse<QuizDto>> createQuiz(@Valid @RequestBody QuizDto quizDto, 
+            Authentication authentication) {
+        UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+        Long trainerId = trainerService.getTrainerByUserId(userPrincipal.getUser().getId()).getId();
         
-        Pageable pageable = PageRequest.of(page, size, Sort.by("createdAt").descending());
-        Page<QuizDto> quizzes = quizService.getQuizzesByTrainer(trainerId, pageable);
+        QuizDto createdQuiz = quizService.createQuiz(quizDto, trainerId);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(new ApiResponse<>(true, "Quiz created successfully", createdQuiz));
+    }
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
+    public ResponseEntity<ApiResponse<QuizDto>> updateQuiz(@PathVariable Long id, 
+            @Valid @RequestBody QuizDto quizDto, Authentication authentication) {
+        UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+        Long trainerId = trainerService.getTrainerByUserId(userPrincipal.getUser().getId()).getId();
+        
+        QuizDto updatedQuiz = quizService.updateQuiz(id, quizDto, trainerId);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz updated successfully", updatedQuiz));
+    }
+
+    @GetMapping("/trainer/my-quizzes")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
+    public ResponseEntity<ApiResponse<List<QuizDto>>> getMyQuizzes(Authentication authentication) {
+        UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+        Long trainerId = trainerService.getTrainerByUserId(userPrincipal.getUser().getId()).getId();
+        
+        List<QuizDto> quizzes = quizService.getQuizzesByTrainer(trainerId);
         return ResponseEntity.ok(new ApiResponse<>(true, "Trainer quizzes retrieved successfully", quizzes));
     }
 
-    @GetMapping("/batch/{batchId}")
-    @Operation(summary = "Get quizzes by batch", description = "Retrieve quizzes assigned to a specific batch")
-    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
-    public ResponseEntity<ApiResponse<List<QuizDto>>> getQuizzesByBatch(@PathVariable Long batchId) {
-        List<QuizDto> quizzes = quizService.getQuizzesByBatch(batchId);
-        return ResponseEntity.ok(new ApiResponse<>(true, "Batch quizzes retrieved successfully", quizzes));
+    @GetMapping("/course/{courseType}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER', 'STUDENT')")
+    public ResponseEntity<ApiResponse<List<QuizDto>>> getQuizzesByCourse(@PathVariable CourseType courseType) {
+        List<QuizDto> quizzes = quizService.getQuizzesByCourseType(courseType);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Course quizzes retrieved successfully", quizzes));
     }
 
-    @GetMapping("/{quizId}/results")
-    @Operation(summary = "Get quiz results", description = "Get results of all students for a specific quiz")
+    @PostMapping("/{id}/activate")
     @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
-    public ResponseEntity<ApiResponse<Page<StudentQuizResultDto>>> getQuizResults(
-            @PathVariable Long quizId,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
-        
-        Pageable pageable = PageRequest.of(page, size, Sort.by("score").descending());
-        Page<StudentQuizResultDto> results = quizService.getQuizResults(quizId, pageable);
-        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz results retrieved successfully", results));
+    public ResponseEntity<ApiResponse<String>> activateQuiz(@PathVariable Long id) {
+        quizService.activateQuiz(id);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz activated successfully"));
     }
+
+    @PostMapping("/{id}/deactivate")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
+    public ResponseEntity<ApiResponse<String>> deactivateQuiz(@PathVariable Long id) {
+        quizService.deactivateQuiz(id);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz deactivated successfully"));
+    }
+
+    // ===============================
+    // = STUDENT OPERATIONS
+    // ===============================
+
+    @GetMapping("/available")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER', 'STUDENT')")
+    public ResponseEntity<ApiResponse<List<QuizDto>>> getAvailableQuizzes() {
+        List<QuizDto> quizzes = quizService.getAvailableQuizzes();
+        return ResponseEntity.ok(new ApiResponse<>(true, "Available quizzes retrieved successfully", quizzes));
+    }
+
+    @GetMapping("/student/available")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER', 'STUDENT')")
+    public ResponseEntity<ApiResponse<List<QuizDto>>> getAvailableQuizzesForStudent(Authentication authentication) {
+        UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+        Long studentId = studentService.getStudentByUserId(userPrincipal.getUser().getId()).getId();
+        
+        List<QuizDto> quizzes = quizService.getAvailableQuizzesForStudent(studentId);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Available quizzes for student retrieved successfully", quizzes));
+    }
+
+    @PostMapping("/{id}/attempt")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER', 'STUDENT')")
+    public ResponseEntity<ApiResponse<StudentQuizAttempt>> submitQuizAttempt(@PathVariable Long id, 
+            @RequestBody Map<Long, String> answers, Authentication authentication) {
+        UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+        Long studentId = studentService.getStudentByUserId(userPrincipal.getUser().getId()).getId();
+        
+        StudentQuizAttempt attempt = quizService.submitQuizAttempt(studentId, id, answers);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz submitted successfully", attempt));
+    }
+
+    @GetMapping("/student/attempts")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER', 'STUDENT')")
+    public ResponseEntity<ApiResponse<List<StudentQuizAttempt>>> getMyQuizAttempts(Authentication authentication) {
+        UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+        Long studentId = studentService.getStudentByUserId(userPrincipal.getUser().getId()).getId();
+        
+        List<StudentQuizAttempt> attempts = quizService.getStudentQuizAttempts(studentId);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Student quiz attempts retrieved successfully", attempts));
+    }
+
+    @GetMapping("/{quizId}/attempts")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
+    public ResponseEntity<ApiResponse<List<StudentQuizAttempt>>> getQuizAttempts(@PathVariable Long quizId) {
+        List<StudentQuizAttempt> attempts = quizService.getQuizAttempts(quizId);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz attempts retrieved successfully", attempts));
+    }
+
+    // ===============================
+    // = QUESTION MANAGEMENT
+    // ===============================
+
+    @PostMapping("/{quizId}/questions")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
+    public ResponseEntity<ApiResponse<QuestionDto>> addQuestionToQuiz(@PathVariable Long quizId, 
+            @Valid @RequestBody QuestionDto questionDto) {
+        QuestionDto createdQuestion = quizService.addQuestionToQuiz(quizId, questionDto);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(new ApiResponse<>(true, "Question added successfully", createdQuestion));
+    }
+
+    @PutMapping("/questions/{questionId}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
+    public ResponseEntity<ApiResponse<QuestionDto>> updateQuestion(@PathVariable Long questionId, 
+            @Valid @RequestBody QuestionDto questionDto) {
+        QuestionDto updatedQuestion = quizService.updateQuestion(questionId, questionDto);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Question updated successfully", updatedQuestion));
+    }
+
+    @DeleteMapping("/questions/{questionId}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
+    public ResponseEntity<ApiResponse<String>> deleteQuestion(@PathVariable Long questionId) {
+        quizService.deleteQuestion(questionId);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Question deleted successfully"));
+    }
+
+    @GetMapping("/{quizId}/questions")
+    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER', 'STUDENT')")
+    public ResponseEntity<ApiResponse<List<QuestionDto>>> getQuizQuestions(@PathVariable Long quizId) {
+        List<QuestionDto> questions = quizService.getQuizQuestions(quizId);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz questions retrieved successfully", questions));
+    }
+
+    // ===============================
+    // = QUIZ ANALYTICS
+    // ===============================
 
     @GetMapping("/{quizId}/analytics")
-    @Operation(summary = "Get quiz analytics", description = "Get detailed analytics for a quiz")
     @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
-    public ResponseEntity<ApiResponse<QuizAnalyticsDto>> getQuizAnalytics(@PathVariable Long quizId) {
-        QuizAnalyticsDto analytics = quizService.getQuizAnalytics(quizId);
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getQuizAnalytics(@PathVariable Long quizId) {
+        Map<String, Object> analytics = quizService.getQuizAnalytics(quizId);
         return ResponseEntity.ok(new ApiResponse<>(true, "Quiz analytics retrieved successfully", analytics));
     }
 
-    @GetMapping("/reports/performance")
-    @Operation(summary = "Get performance report", description = "Generate performance report for quizzes")
+    @GetMapping("/{quizId}/results")
     @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
-    public ResponseEntity<ApiResponse<List<PerformanceReportDto>>> getPerformanceReport(
-            @RequestParam(required = false) Long batchId,
-            @RequestParam(required = false) Long courseId,
-            @RequestParam(required = false) @Parameter(description = "Start date (YYYY-MM-DD)") LocalDate startDate,
-            @RequestParam(required = false) @Parameter(description = "End date (YYYY-MM-DD)") LocalDate endDate) {
-        
-        List<PerformanceReportDto> report = quizService.getPerformanceReport(batchId, courseId, startDate, endDate);
-        return ResponseEntity.ok(new ApiResponse<>(true, "Performance report generated successfully", report));
-    }
-
-    @GetMapping("/statistics/summary")
-    @Operation(summary = "Get quiz statistics summary", description = "Get overall quiz statistics")
-    @PreAuthorize("hasAnyRole('ADMIN', 'TRAINER')")
-    public ResponseEntity<ApiResponse<QuizStatsSummaryDto>> getQuizStatsSummary(
-            @RequestParam(required = false) Long trainerId,
-            @RequestParam(required = false) Long batchId) {
-        
-        QuizStatsSummaryDto summary = quizService.getQuizStatsSummary(trainerId, batchId);
-        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz statistics summary retrieved successfully", summary));
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getQuizResults(@PathVariable Long quizId) {
+        List<Map<String, Object>> results = quizService.getQuizResults(quizId);
+        return ResponseEntity.ok(new ApiResponse<>(true, "Quiz results retrieved successfully", results));
     }
 }
